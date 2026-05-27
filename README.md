@@ -8,6 +8,7 @@ EP build.
 
 - `uv`
 - ccache
+- [onnxruntime with FlexAttention support](https://github.com/mshr-h/onnxruntime/tree/preview-flexattention-cpu)
 
 ## Environment
 
