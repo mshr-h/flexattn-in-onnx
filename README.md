@@ -46,3 +46,8 @@ uv pip install --force-reinstall --no-deps build/Linux/Release/dist/onnxruntime-
 
 cd ..
 ```
+
+## Examples
+
+See [`prefixlm/README.md`](prefixlm/README.md) for the PrefixLM-style
+FlexAttention export and runtime commands.
