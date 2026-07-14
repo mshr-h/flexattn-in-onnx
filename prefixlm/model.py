@@ -4,7 +4,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
 
-class MultiHeadAttention(torch.nn.Module):
+class _MultiHeadAttentionBase(torch.nn.Module):
     def __init__(
         self,
         batch: int,
@@ -38,14 +38,6 @@ class MultiHeadAttention(torch.nn.Module):
         )
         self.register_buffer("rope_cos", rope_cos, persistent=False)
         self.register_buffer("rope_sin", rope_sin, persistent=False)
-        self.block_mask = create_block_mask(
-            self._mask_mod(prefix_len),
-            B=batch,
-            H=num_heads,
-            Q_LEN=seq_len,
-            KV_LEN=seq_len,
-            device=device,
-        )
 
     @staticmethod
     def _mask_mod(prefix_len: int):
@@ -104,7 +96,9 @@ class MultiHeadAttention(torch.nn.Module):
         rotated_odd = x_even * sin + x_odd * cos
         return torch.stack((rotated_even, rotated_odd), dim=-1).flatten(-2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _project_qkv(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, seq_len, channels = x.shape
         if batch != self.batch or seq_len != self.seq_len:
             raise ValueError(
@@ -124,6 +118,42 @@ class MultiHeadAttention(torch.nn.Module):
         v = v.transpose(1, 2)
         q = self._apply_rope(q)
         k = self._apply_rope(k)
+        return q, k, v
+
+
+class MultiHeadAttention(_MultiHeadAttentionBase):
+    def __init__(
+        self,
+        batch: int,
+        seq_len: int,
+        embed_dim: int,
+        num_heads: int,
+        prefix_len: int,
+        rope_theta: float = 10000.0,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        super().__init__(
+            batch=batch,
+            seq_len=seq_len,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            prefix_len=prefix_len,
+            rope_theta=rope_theta,
+            device=device,
+        )
+        self.block_mask = create_block_mask(
+            self._mask_mod(prefix_len),
+            B=batch,
+            H=num_heads,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=device,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        q, k, v = self._project_qkv(x)
+        batch = x.shape[0]
+        seq_len = x.shape[1]
 
         out = flex_attention(
             q,
@@ -132,6 +162,61 @@ class MultiHeadAttention(torch.nn.Module):
             score_mod=self._score_mod(self.prefix_len),
             block_mask=self.block_mask,
         )
+
+        out = out.transpose(1, 2).reshape(batch, seq_len, self.embed_dim)
+        return self.out_proj(out)
+
+
+class MultiHeadAttentionExpanded(_MultiHeadAttentionBase):
+    def __init__(
+        self,
+        batch: int,
+        seq_len: int,
+        embed_dim: int,
+        num_heads: int,
+        prefix_len: int,
+        rope_theta: float = 10000.0,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        super().__init__(
+            batch=batch,
+            seq_len=seq_len,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            prefix_len=prefix_len,
+            rope_theta=rope_theta,
+            device=device,
+        )
+        q_idx = torch.arange(seq_len, device=device)[:, None]
+        kv_idx = torch.arange(seq_len, device=device)[None, :]
+        q_is_prefix = q_idx < prefix_len
+        kv_is_prefix = kv_idx < prefix_len
+        prefix_to_prefix = q_is_prefix & kv_is_prefix
+        mixture_to_prefix = (~q_is_prefix) & kv_is_prefix
+        mixture_to_causal_mixture = (
+            (~q_is_prefix) & (~kv_is_prefix) & (kv_idx <= q_idx)
+        )
+        attention_mask = (
+            prefix_to_prefix | mixture_to_prefix | mixture_to_causal_mixture
+        )
+        self.register_buffer(
+            "attention_mask", attention_mask[None, None, :, :], persistent=False
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        q, k, v = self._project_qkv(x)
+        batch = x.shape[0]
+        seq_len = x.shape[1]
+
+        scores = torch.matmul(q, k.transpose(-2, -1))
+        scores = scores * (self.head_dim ** -0.5)
+        scores = torch.where(
+            self.attention_mask,
+            scores,
+            torch.full_like(scores, -float("inf")),
+        )
+        probs = torch.softmax(scores, dim=-1)
+        out = torch.matmul(probs, v)
 
         out = out.transpose(1, 2).reshape(batch, seq_len, self.embed_dim)
         return self.out_proj(out)
@@ -155,9 +240,19 @@ def build_model(
     seed: int,
     rope_theta: float = 10000.0,
     device: torch.device | str = "cpu",
-) -> MultiHeadAttention:
+    implementation: str = "flex",
+) -> MultiHeadAttention | MultiHeadAttentionExpanded:
     torch.manual_seed(seed)
-    model = MultiHeadAttention(
+    if implementation == "flex":
+        model_cls = MultiHeadAttention
+    elif implementation == "expanded":
+        model_cls = MultiHeadAttentionExpanded
+    else:
+        raise ValueError(
+            f"Unsupported implementation: {implementation}. "
+            "Expected 'flex' or 'expanded'."
+        )
+    model = model_cls(
         batch=batch,
         seq_len=seq_len,
         embed_dim=embed_dim,

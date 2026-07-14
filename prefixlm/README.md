@@ -24,3 +24,31 @@ uv run python compare_flexattn_pytorch_ort.py
 
 The exporter checks that ONNX validation passes, there is exactly one preview
 FlexAttention node, `score_mod` is annotated, and input/output shapes match.
+
+
+## Benchmark
+
+Run from the repo root to compare `ai.onnx.preview::FlexAttention` with an
+expanded lower-level ONNX graph on ONNX Runtime CPU EP.
+
+```bash
+uv run python prefixlm/benchmark_flexattn_vs_expansion.py \
+  --seq-lens 128 512 1024 2048 \
+  --batch 1 \
+  --embed-dim 128 \
+  --num-heads 4 \
+  --prefix-len 3 \
+  --dtype float32 \
+  --warmup 10 \
+  --repeats 50 \
+  --out-dir prefixlm/benchmark_results
+```
+
+The benchmark requires an ONNX Runtime build with
+`ai.onnx.preview::FlexAttention` support. Set `PYTHONPATH` to a rebuilt ONNX
+Runtime package when measuring local kernel changes. It writes
+`benchmark_results.csv`, `benchmark_results.json`, and `benchmark_summary.md`
+under `--out-dir`, including latency statistics, correctness metrics, ORT
+metadata, provider, graph optimization level, and thread settings. Use
+`--save-models` only when you want to persist generated ONNX files; use
+`--enable-profiling` or `--save-optimized-models` when you need diagnostics.
