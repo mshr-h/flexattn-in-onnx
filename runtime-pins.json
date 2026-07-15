@@ -1,0 +1,11 @@
+{
+  "onnxruntime_repository": "https://github.com/mshr-h/onnxruntime",
+  "onnxruntime_commit": "3698523a3f28f7a602554f931ceec61671fbd375",
+  "onnx_schema_commit": "cb9eb1006db31582d7cf1e4fae7b1a5f287df494",
+  "onnxruntime_api_version": 30,
+  "cuda_plugin_api_version": 30,
+  "onnx_preview_opset": 1,
+  "python": "3.11",
+  "onnx": "1.22.0",
+  "torch": "2.12.0"
+}

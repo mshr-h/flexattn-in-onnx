@@ -3,3 +3,6 @@ __pycache__/
 onnx-src/
 onnxruntime-src/
 prefixlm/benchmark_results/
+build-ort-prefixlm/
+build-ort-prefixlm-cuda/
+build-ort-prefixlm-block-gemm/
